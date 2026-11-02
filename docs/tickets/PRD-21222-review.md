@@ -1,0 +1,15 @@
+# PRD-21222 · Code review
+
+## Round 1 · 2026-11-02 · reviewed dev/PRD-21222 @ 0943fe2 (base main @ 28c9850)
+
+Verdict: changes requested
+
+### Findings
+
+1. [must-fix] `src/bitdefender_mcp/client.py:114-116` (`_sleep_before_retry`) and `src/bitdefender_mcp/client.py:119-125` (`_parse_retry_after`) — the vendor's `Retry-After` header value is used as the sleep duration with no upper bound. `_sleep_before_retry` only applies the `MAX_BACKOFF_S` (20s) cap on the exponential-backoff fallback path (`retry_after_s is None`); when GravityZone sends a `Retry-After` header, whatever value it parses to is slept for as-is. A large or misconfigured value (e.g. `Retry-After: 100000`) makes any of the 10 tools hang for that many seconds instead of failing fast with `rate_limited`. This directly contradicts the tech design's own Non-functional requirement ("total time per tool call capped under 120s (SOP §5)") and SOP §14 Checklist's "对 429/5xx 有限重试 + backoff，尊重 Retry-After，单次调用总耗时 < 120s" item. The two tests that exercise this path (`tests/test_tools.py::test_http_429_maps_to_rate_limited_after_retries_exhausted`, `::test_rate_limit_backoff_then_success`) both use `Retry-After: 0` and monkeypatch `asyncio.sleep` to a no-op, so the missing clamp has never been exercised. Fix: clamp the parsed `Retry-After` value to `MAX_BACKOFF_S` (or an equivalent cap) before sleeping.
+2. [must-fix] `src/bitdefender_mcp/` (no file — the gap is an absence) — the tech design's Non-functional section commits to "a structured log line per tool call (tool name, GravityZone method, status code, duration) with the API key redacted", and SOP §14 Checklist requires "结构化日志带 request-id". `grep -rn "logging\|logger" src/` returns nothing: no logging statement exists anywhere in the service. This is a technical-design requirement that was not implemented, not a nice-to-have — `legs/review.md` R3 treats "技术设计要求的改动没做" as a must-fix. Either add the promised structured logging, or update the tech design (and the Self-test section's claims) if the decision to skip it was made and simply not written down.
+
+### Suggestions
+
+3. [suggestion] `src/bitdefender_mcp/client.py:75-82` — on `httpx.TimeoutException` / `httpx.HTTPError`, `_sleep_before_retry` is called unconditionally, including on the final attempt (`attempt == MAX_ATTEMPTS`), unlike the 429/5xx branch which correctly skips the sleep via `if attempt < MAX_ATTEMPTS`. This wastes up to ~4s of real time before raising on a pure network/timeout failure. Harmless (bounded by `MAX_BACKOFF_S`) but inconsistent with the 429/5xx path's pattern; worth aligning for consistency.
+4. [suggestion] `docs/tickets/PRD-21222.md` Self-test section ("Test case results") — states "16 cases ... 10 automated (all pass, ...)", but `docs/tickets/PRD-21222.ac.json` has only 9 entries with `"type": "auto"` (TC1, TC2, TC4, TC6, TC7, TC13, TC14, TC15, TC16); TC11 is `"type": "manual"` with `"result": "untested"`. The individual per-case evidence in the `.ac.json` is accurate and not overclaimed, but the prose summary count is off by one. Worth a one-line correction so a future reader doesn't take "10 automated" at face value.
