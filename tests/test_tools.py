@@ -3,12 +3,17 @@
 Mocks GravityZone's JSON-RPC endpoints with respx -- no network, no vendor
 account needed. Maps to the automated test cases in
 docs/tickets/PRD-21222.ac.json: TC1, TC2, TC4, TC6, TC7, TC13, TC14, TC15, TC16.
+
+The `test_retry_after_*` and `test_*_log_line*` tests below are dev-added
+regression coverage for PRD-21222 code review round 1 (findings 1 and 2),
+not AC-derived test cases -- source: dev.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import logging
 
 import httpx
 import pytest
@@ -315,6 +320,122 @@ async def test_rate_limit_backoff_then_success(mcp, monkeypatch):
     body = json.loads(_text(result))
     assert body["items"] == []
     assert "error" not in body
+
+
+# ---------------------------------------------------------------------------
+# Review round 1, finding 1 -- a vendor-supplied Retry-After must be clamped,
+# not trusted as-is (source: dev, not an AC test case)
+# ---------------------------------------------------------------------------
+
+
+async def test_retry_after_is_clamped_to_max_backoff(mcp, monkeypatch):
+    from bitdefender_mcp.client import MAX_BACKOFF_S
+
+    recorded_delays: list[float] = []
+    monkeypatch.setattr(asyncio, "sleep", _record_sleep(recorded_delays))
+    responses = iter(
+        [
+            httpx.Response(429, headers={"Retry-After": "100000"}),
+            httpx.Response(
+                200,
+                json={"id": 1, "result": {"page": 1, "perPage": 50, "pagesCount": 1, "total": 0, "items": []}},
+            ),
+        ]
+    )
+
+    with respx.mock(assert_all_called=True) as router:
+        router.post(url__regex=JSONRPC_URL_RE).mock(side_effect=lambda request: next(responses))
+        with credentials():
+            result = await mcp.call_tool("bitdefender_list_policies", {})
+
+    body = json.loads(_text(result))
+    assert "error" not in body
+    # Without the clamp this would be [100000.0] and the call would hang.
+    assert recorded_delays == [MAX_BACKOFF_S]
+
+
+async def test_retry_after_exhausted_is_clamped_on_every_retry_before_raising(mcp, monkeypatch):
+    from bitdefender_mcp.client import MAX_ATTEMPTS, MAX_BACKOFF_S
+
+    recorded_delays: list[float] = []
+    monkeypatch.setattr(asyncio, "sleep", _record_sleep(recorded_delays))
+
+    with respx.mock(assert_all_called=True) as router:
+        router.post(url__regex=JSONRPC_URL_RE).mock(
+            return_value=httpx.Response(429, headers={"Retry-After": "999999"})
+        )
+        with credentials():
+            result = await mcp.call_tool("bitdefender_list_policies", {})
+
+    body = json.loads(_text(result))
+    assert body["error"]["code"] == "rate_limited"
+    # One sleep per retry (the final, MAX_ATTEMPTS-th attempt raises without
+    # sleeping) -- every one of them clamped, not the raw 999999s header value.
+    assert recorded_delays == [MAX_BACKOFF_S] * (MAX_ATTEMPTS - 1)
+
+
+def _record_sleep(into: list[float]):
+    async def _sleep(seconds: float) -> None:
+        into.append(seconds)
+
+    return _sleep
+
+
+# ---------------------------------------------------------------------------
+# Review round 1, finding 2 -- one structured log line per tool call, with
+# the credential never appearing in it (source: dev, not an AC test case)
+# ---------------------------------------------------------------------------
+
+
+async def test_successful_tool_call_emits_one_structured_log_line(mcp, caplog):
+    caplog.set_level(logging.INFO, logger="bitdefender_mcp.client")
+    with respx.mock(assert_all_called=True) as router:
+        router.post(url__regex=JSONRPC_URL_RE).mock(
+            return_value=httpx.Response(
+                200, json={"id": 1, "result": {"page": 1, "perPage": 50, "pagesCount": 1, "total": 0, "items": []}}
+            )
+        )
+        with credentials(api_key="super-secret-key"):
+            await mcp.call_tool("bitdefender_list_policies", {})
+
+    records = [r for r in caplog.records if r.name == "bitdefender_mcp.client"]
+    assert len(records) == 1
+    line = json.loads(records[0].message)
+    assert line == {
+        "event": "gravityzone_tool_call",
+        "request_id": None,  # mcp.call_tool() bypasses CredentialMiddleware in these tests
+        "tool": "bitdefender_list_policies",
+        "service": "policies",
+        "method": "getPoliciesList",
+        "status_code": 200,
+        "outcome": "ok",
+        "duration_ms": line["duration_ms"],
+    }
+    assert isinstance(line["duration_ms"], (int, float))
+    assert "super-secret-key" not in records[0].message
+    assert "Authorization" not in records[0].message
+
+
+async def test_failed_tool_call_emits_a_log_line_with_error_outcome(mcp, caplog):
+    caplog.set_level(logging.INFO, logger="bitdefender_mcp.client")
+    with respx.mock(assert_all_called=True) as router:
+        router.post(url__regex=JSONRPC_URL_RE).mock(return_value=httpx.Response(401, json={"message": "bad key"}))
+        with credentials(api_key="super-secret-key"):
+            await mcp.call_tool("bitdefender_list_policies", {})
+
+    records = [r for r in caplog.records if r.name == "bitdefender_mcp.client"]
+    assert len(records) == 1
+    line = json.loads(records[0].message)
+    assert line["status_code"] == 401
+    assert line["outcome"] == "error"
+    assert "super-secret-key" not in records[0].message
+
+
+async def test_missing_credentials_does_not_emit_a_log_line(mcp, caplog):
+    # No GravityZone call is ever made on this path -- nothing to log.
+    caplog.set_level(logging.INFO, logger="bitdefender_mcp.client")
+    await mcp.call_tool("bitdefender_list_policies", {})
+    assert [r for r in caplog.records if r.name == "bitdefender_mcp.client"] == []
 
 
 async def _no_sleep(_seconds: float) -> None:

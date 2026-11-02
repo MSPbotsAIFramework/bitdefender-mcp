@@ -6,6 +6,11 @@ ContextVar for the duration of the request, and resets it in `finally`.
 Missing the required header short-circuits with HTTP 401 before the request
 reaches the MCP app -- GravityZone itself is never called with an empty
 credential.
+
+Also mints a per-request id (also request-scoped, also reset in `finally`)
+so the structured log line `client.py` emits for each GravityZone call can
+be correlated back to the inbound MCP request (SOP Checklist §14:
+structured logs must carry a request id).
 """
 
 from __future__ import annotations
@@ -15,6 +20,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 from .credentials import API_KEY_HEADER, BASE_URL_HEADER, reset_credentials, set_credentials
+from .logging_context import new_request_id, reset_request_id, set_request_id
 
 
 class CredentialMiddleware(BaseHTTPMiddleware):
@@ -43,8 +49,10 @@ class CredentialMiddleware(BaseHTTPMiddleware):
             )
 
         base_url = request.headers.get(BASE_URL_HEADER)
-        token = set_credentials(api_key, base_url)
+        cred_token = set_credentials(api_key, base_url)
+        request_id_token = set_request_id(new_request_id())
         try:
             return await call_next(request)
         finally:
-            reset_credentials(token)
+            reset_request_id(request_id_token)
+            reset_credentials(cred_token)

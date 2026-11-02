@@ -49,7 +49,7 @@ def register(mcp: FastMCP) -> None:
                 "items": items,
             }
 
-        return await run_tool(call)
+        return await run_tool("bitdefender_list_endpoints", call)
 
     @mcp.tool(
         description=(
@@ -62,4 +62,4 @@ def register(mcp: FastMCP) -> None:
         async def call(client: GravityZoneClient) -> dict[str, Any]:
             return await client.call(SERVICE, "getManagedEndpointDetails", {"endpointId": endpoint_id})
 
-        return await run_tool(call)
+        return await run_tool("bitdefender_get_endpoint_details", call)

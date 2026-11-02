@@ -53,7 +53,7 @@ def register(mcp: FastMCP) -> None:
                 "items": items,
             }
 
-        return await run_tool(call)
+        return await run_tool("bitdefender_list_incidents", call)
 
     @mcp.tool(
         description=(
@@ -66,7 +66,7 @@ def register(mcp: FastMCP) -> None:
         async def call(client: GravityZoneClient) -> dict[str, Any]:
             return await client.call(SERVICE, "getIncident", {"incidentId": incident_id})
 
-        return await run_tool(call)
+        return await run_tool("bitdefender_get_incident", call)
 
     @mcp.tool(
         description=(
@@ -84,7 +84,7 @@ def register(mcp: FastMCP) -> None:
             )
             return {"incident_id": incident_id, "priority": priority, "status": "updated"}
 
-        return await run_tool(call)
+        return await run_tool("bitdefender_change_incident_priority", call)
 
     @mcp.tool(
         description=(
@@ -102,7 +102,7 @@ def register(mcp: FastMCP) -> None:
             )
             return {"incident_id": incident_id, "assignee_ids": assignee_ids, "status": "assigned"}
 
-        return await run_tool(call)
+        return await run_tool("bitdefender_assign_incident", call)
 
     @mcp.tool(
         description=(
@@ -118,7 +118,7 @@ def register(mcp: FastMCP) -> None:
             task_id = result.get("taskId") if isinstance(result, dict) else result
             return {"endpoint_id": endpoint_id, "task_id": task_id, "status": "isolation_requested"}
 
-        return await run_tool(call)
+        return await run_tool("bitdefender_isolate_endpoint", call)
 
     @mcp.tool(
         description=(
@@ -135,4 +135,4 @@ def register(mcp: FastMCP) -> None:
             task_id = result.get("taskId") if isinstance(result, dict) else result
             return {"endpoint_id": endpoint_id, "task_id": task_id, "status": "restore_requested"}
 
-        return await run_tool(call)
+        return await run_tool("bitdefender_restore_endpoint_from_isolation", call)
