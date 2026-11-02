@@ -1,0 +1,165 @@
+[
+  {
+    "id": "TC1",
+    "ac": "AC1",
+    "text": "Given a valid GravityZone API key in X-Bitdefender-Api-Key, when bitdefender_list_policies is called, then it returns a paginated list of policy {id, name} objects matching GravityZone's getPoliciesList response shape.",
+    "type": "auto",
+    "tests": ["tests/test_tools.py::test_list_policies_returns_paginated_items"]
+  },
+  {
+    "id": "TC2",
+    "ac": "AC1",
+    "text": "Given per_page=500 is passed, when bitdefender_list_policies is called, then the effective per_page sent upstream is capped at 200, not passed through uncapped.",
+    "type": "auto",
+    "tests": ["tests/test_tools.py::test_list_policies_caps_per_page_at_200"]
+  },
+  {
+    "id": "TC3",
+    "ac": "AC2",
+    "text": "Given a real policy id, when bitdefender_get_policy_details is called against a live GravityZone tenant, then it returns that policy's configured modules, matching the GravityZone console for the same tenant.",
+    "type": "manual",
+    "steps": [
+      "Obtain a GravityZone tenant API key and a known policy id from the GravityZone console",
+      "Call bitdefender_get_policy_details with that policy id via a real tools/call",
+      "Open the same policy in the GravityZone console and compare module settings"
+    ],
+    "expect": "Tool response's module configuration matches what the GravityZone console shows for the same policy id",
+    "result": "untested",
+    "notes": "needs a real vendor account"
+  },
+  {
+    "id": "TC4",
+    "ac": "AC3",
+    "text": "Given a valid API key, when bitdefender_list_endpoints is called, then it returns a paginated list of endpoint {id, name, status} objects.",
+    "type": "auto",
+    "tests": ["tests/test_tools.py::test_list_endpoints_returns_paginated_items"]
+  },
+  {
+    "id": "TC5",
+    "ac": "AC4",
+    "text": "Given a real endpoint id, when bitdefender_get_endpoint_details is called against a live GravityZone tenant, then it returns that endpoint's assigned policy and protection status.",
+    "type": "manual",
+    "steps": [
+      "Obtain a GravityZone tenant API key and a known endpoint id",
+      "Call bitdefender_get_endpoint_details with that endpoint id",
+      "Compare the returned assigned policy and protection status against the GravityZone console"
+    ],
+    "expect": "Returned assigned policy and protection status match the console for the same endpoint",
+    "result": "untested",
+    "notes": "needs a real vendor account"
+  },
+  {
+    "id": "TC6",
+    "ac": "AC5",
+    "text": "Given a valid API key and no filters, when bitdefender_list_incidents is called, then it returns a paginated list of incident {id, name, priority, status} objects.",
+    "type": "auto",
+    "tests": ["tests/test_tools.py::test_list_incidents_returns_paginated_items"]
+  },
+  {
+    "id": "TC7",
+    "ac": "AC5",
+    "text": "Given a tenant with zero open incidents, when bitdefender_list_incidents is called, then it returns an empty items array, not an error.",
+    "type": "auto",
+    "tests": ["tests/test_tools.py::test_list_incidents_empty_tenant_returns_empty_items"]
+  },
+  {
+    "id": "TC8",
+    "ac": "AC6",
+    "text": "Given a real incident id, when bitdefender_get_incident is called against a live GravityZone tenant, then it returns that incident's affected endpoints and timeline summary.",
+    "type": "manual",
+    "steps": [
+      "Obtain a GravityZone tenant API key and a known incident id",
+      "Call bitdefender_get_incident with that incident id",
+      "Compare affected endpoints and timeline against the GravityZone console"
+    ],
+    "expect": "Returned affected endpoints and timeline summary match the console for the same incident",
+    "result": "untested",
+    "notes": "needs a real vendor account"
+  },
+  {
+    "id": "TC9",
+    "ac": "AC7",
+    "text": "Given a real incident id and an allowed priority value, when bitdefender_change_incident_priority is called, then the incident's priority changes, confirmed by a follow-up bitdefender_get_incident call.",
+    "type": "manual",
+    "steps": [
+      "Obtain a GravityZone tenant API key and a known incident id",
+      "Call bitdefender_change_incident_priority with a new priority value",
+      "Call bitdefender_get_incident on the same incident id"
+    ],
+    "expect": "The follow-up get_incident call shows the new priority value",
+    "result": "untested",
+    "notes": "needs a real vendor account"
+  },
+  {
+    "id": "TC10",
+    "ac": "AC8",
+    "text": "Given a real incident id and a GravityZone user id, when bitdefender_assign_incident is called, then the incident is reassigned, confirmed by a follow-up bitdefender_get_incident call.",
+    "type": "manual",
+    "steps": [
+      "Obtain a GravityZone tenant API key, a known incident id, and a valid GravityZone user id",
+      "Call bitdefender_assign_incident with that user id",
+      "Call bitdefender_get_incident on the same incident id"
+    ],
+    "expect": "The follow-up get_incident call shows the incident assigned to the given user id",
+    "result": "untested",
+    "notes": "needs a real vendor account"
+  },
+  {
+    "id": "TC11",
+    "ac": "AC9",
+    "text": "Given a real endpoint id, when bitdefender_isolate_endpoint is called, then GravityZone creates an isolation task and the tool returns its task id; the tool is annotated destructiveHint.",
+    "type": "manual",
+    "steps": [
+      "Obtain a GravityZone tenant API key and a known endpoint id (non-production/test endpoint)",
+      "Call bitdefender_isolate_endpoint with that endpoint id",
+      "Check the GravityZone console for the created isolation task and the tool's destructiveHint annotation in tools/list"
+    ],
+    "expect": "A task id is returned and the isolation task appears in the GravityZone console; tools/list marks the tool destructiveHint:true",
+    "result": "untested",
+    "notes": "needs a real vendor account"
+  },
+  {
+    "id": "TC12",
+    "ac": "AC10",
+    "text": "Given a previously isolated endpoint id, when bitdefender_restore_endpoint_from_isolation is called, then GravityZone creates a restore task and the tool returns its task id.",
+    "type": "manual",
+    "steps": [
+      "Using the endpoint isolated in TC11, call bitdefender_restore_endpoint_from_isolation",
+      "Check the GravityZone console for the created restore task"
+    ],
+    "expect": "A task id is returned and the restore task appears in the GravityZone console",
+    "result": "untested",
+    "notes": "needs a real vendor account"
+  },
+  {
+    "id": "TC13",
+    "ac": "AC11",
+    "text": "Given no X-Bitdefender-Api-Key header is supplied, when any bitdefender_* tool is called, then it returns HTTP 401 with a body naming the missing header, not a 500.",
+    "type": "auto",
+    "tests": ["tests/test_middleware.py::test_missing_api_key_header_returns_401"]
+  },
+  {
+    "id": "TC14",
+    "ac": "AC12",
+    "text": "Given GravityZone returns JSON-RPC error -32602 or HTTP 429, when a bitdefender_* tool receives it, then it maps to the structured error envelope with code invalid_argument or rate_limited respectively, never an unhandled exception or raw 500.",
+    "type": "auto",
+    "tests": [
+      "tests/test_tools.py::test_jsonrpc_invalid_params_maps_to_invalid_argument",
+      "tests/test_tools.py::test_http_429_maps_to_rate_limited"
+    ]
+  },
+  {
+    "id": "TC15",
+    "ac": "AC13",
+    "text": "Given two concurrent requests using two different X-Bitdefender-Api-Key values, when each calls bitdefender_list_policies, then each response reflects only its own tenant's mocked data and the contextvar for request A is never visible while handling request B.",
+    "type": "auto",
+    "tests": ["tests/test_middleware.py::test_concurrent_requests_do_not_leak_credentials"]
+  },
+  {
+    "id": "TC16",
+    "ac": "AC14",
+    "text": "Given a mocked sequence of HTTP 429 responses followed by a 200, when a bitdefender_* tool call is retried, then it follows the bounded backoff policy and either succeeds or returns rate_limited, never hanging past the configured cap.",
+    "type": "auto",
+    "tests": ["tests/test_tools.py::test_rate_limit_backoff_then_success_or_rate_limited"]
+  }
+]
