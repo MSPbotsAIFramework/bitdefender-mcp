@@ -1,0 +1,53 @@
+# PRD-21222 · Code review
+
+Status: frozen @ 2162524
+
+## Round 1 · 2026-11-02 · reviewed dev/PRD-21222 @ 0943fe2 (base main @ 28c9850)
+
+Verdict: changes requested
+
+### Findings
+
+1. [must-fix] `src/bitdefender_mcp/client.py:114-116` (`_sleep_before_retry`) and `src/bitdefender_mcp/client.py:119-125` (`_parse_retry_after`) — the vendor's `Retry-After` header value is used as the sleep duration with no upper bound. `_sleep_before_retry` only applies the `MAX_BACKOFF_S` (20s) cap on the exponential-backoff fallback path (`retry_after_s is None`); when GravityZone sends a `Retry-After` header, whatever value it parses to is slept for as-is. A large or misconfigured value (e.g. `Retry-After: 100000`) makes any of the 10 tools hang for that many seconds instead of failing fast with `rate_limited`. This directly contradicts the tech design's own Non-functional requirement ("total time per tool call capped under 120s (SOP §5)") and SOP §14 Checklist's "对 429/5xx 有限重试 + backoff，尊重 Retry-After，单次调用总耗时 < 120s" item. The two tests that exercise this path (`tests/test_tools.py::test_http_429_maps_to_rate_limited_after_retries_exhausted`, `::test_rate_limit_backoff_then_success`) both use `Retry-After: 0` and monkeypatch `asyncio.sleep` to a no-op, so the missing clamp has never been exercised. Fix: clamp the parsed `Retry-After` value to `MAX_BACKOFF_S` (or an equivalent cap) before sleeping.
+2. [must-fix] `src/bitdefender_mcp/` (no file — the gap is an absence) — the tech design's Non-functional section commits to "a structured log line per tool call (tool name, GravityZone method, status code, duration) with the API key redacted", and SOP §14 Checklist requires "结构化日志带 request-id". `grep -rn "logging\|logger" src/` returns nothing: no logging statement exists anywhere in the service. This is a technical-design requirement that was not implemented, not a nice-to-have — `legs/review.md` R3 treats "技术设计要求的改动没做" as a must-fix. Either add the promised structured logging, or update the tech design (and the Self-test section's claims) if the decision to skip it was made and simply not written down.
+
+### Suggestions
+
+3. [suggestion] `src/bitdefender_mcp/client.py:75-82` — on `httpx.TimeoutException` / `httpx.HTTPError`, `_sleep_before_retry` is called unconditionally, including on the final attempt (`attempt == MAX_ATTEMPTS`), unlike the 429/5xx branch which correctly skips the sleep via `if attempt < MAX_ATTEMPTS`. This wastes up to ~4s of real time before raising on a pure network/timeout failure. Harmless (bounded by `MAX_BACKOFF_S`) but inconsistent with the 429/5xx path's pattern; worth aligning for consistency.
+4. [suggestion] `docs/tickets/PRD-21222.md` Self-test section ("Test case results") — states "16 cases ... 10 automated (all pass, ...)", but `docs/tickets/PRD-21222.ac.json` has only 9 entries with `"type": "auto"` (TC1, TC2, TC4, TC6, TC7, TC13, TC14, TC15, TC16); TC11 is `"type": "manual"` with `"result": "untested"`. The individual per-case evidence in the `.ac.json` is accurate and not overclaimed, but the prose summary count is off by one. Worth a one-line correction so a future reader doesn't take "10 automated" at face value.
+
+### Fixes (round 1)
+
+Only the two must-fix findings were addressed; the two suggestions are out of scope for a review-fix round and were left untouched.
+
+1. **Finding 1 (unbounded `Retry-After` sleep)** — `src/bitdefender_mcp/client.py:_sleep_before_retry` now clamps the delay to `MAX_BACKOFF_S` on both paths (vendor-supplied `Retry-After` and the exponential-backoff fallback): `delay = retry_after_s if retry_after_s is not None else 2 ** (attempt - 1)` followed by `await asyncio.sleep(min(delay, MAX_BACKOFF_S))`. A value like `Retry-After: 100000` now sleeps for at most 20s instead of 100000s.
+   - New regression tests (source: dev) in `tests/test_tools.py`: `test_retry_after_is_clamped_to_max_backoff` (429 then success, asserts the recorded `asyncio.sleep` delay is `MAX_BACKOFF_S`, not the raw 100000s header value) and `test_retry_after_exhausted_is_clamped_on_every_retry_before_raising` (429 on every attempt with `Retry-After: 999999`, asserts every retry's delay was clamped before `rate_limited` is raised). Both fail against the pre-fix code (recorded delay would be 100000.0 / 999999.0) and pass against the fix.
+2. **Finding 2 (no structured per-tool-call logging)** — added `src/bitdefender_mcp/logging_context.py` (two request-scoped `ContextVar`s, same pattern as `credentials.py`: a request id minted and scoped by `middleware.py`, and a tool name scoped by `tools/_shared.run_tool` around each of the 10 tools' call to `GravityZoneClient.call`). `client.py`'s `call()` now wraps its retry loop in `try/finally` and logs one structured JSON line per invocation via `logging.getLogger(__name__).info(...)`: `{"event": "gravityzone_tool_call", "request_id", "tool", "service", "method", "status_code", "outcome", "duration_ms"}`. The credential is never a field in that line (verified by test, see below). `__main__.py` now calls `logging.basicConfig(level=logging.INFO, format="%(message)s")` so the line actually reaches stdout under uvicorn -- without it the line would be silently dropped by the root logger's default WARNING level.
+   - New regression tests (source: dev): `tests/test_tools.py::test_successful_tool_call_emits_one_structured_log_line` (asserts the exact log payload shape and that the API key string never appears in the log record's message), `::test_failed_tool_call_emits_a_log_line_with_error_outcome` (401 path, `outcome: "error"`, credential absent from the message), `::test_missing_credentials_does_not_emit_a_log_line` (no GravityZone call made -> nothing logged); `tests/test_middleware.py::test_request_id_set_during_mcp_request`, `::test_request_id_not_set_on_health_endpoint`, `::test_request_id_differs_between_requests`, `::test_request_id_reset_after_request_completes`.
+
+**Re-tested on**: `dev/PRD-21222` at the fix commit pushed this round (see the Doc(en) link in this round's `[DEV]` stub for the exact sha), synced with `main @ 28c9850` (no new commits on `main` since round 1 -- `git merge-base --is-ancestor origin/main HEAD` holds, nothing to merge).
+
+**Gate re-run**: `uv run pytest` -- 26 passed (17 pre-existing + 9 new), 0 failed. `tdd.py diff --from baseline --to final`: no regressions, no new failures. Chinese-character scan (`grep -rnP '[\x{4e00}-\x{9fff}]' src/ tests/ README.md docs/tickets/PRD-21222.md`): no matches (one was introduced and fixed in `middleware.py`'s docstring during this round, before commit). Smoke test against a locally running server with a placeholder `X-Bitdefender-Api-Key`: `/health` -> 200, missing-header `/mcp` POST -> 401, `initialize` with the placeholder header -> 200. `tools/list` count (10) and shape re-verified via `tests/test_tools.py::test_tools_list_snapshot`, unchanged by this round.
+
+## Round 2 · 2026-11-02 · reviewed dev/PRD-21222 @ 2162524 (base main @ 28c9850)
+
+Verdict: approved
+
+### Fix verification (round 1 must-fix)
+
+1. **Finding 1 (unbounded `Retry-After` sleep)** -- confirmed fixed. `client.py:_sleep_before_retry` now computes `delay = retry_after_s if retry_after_s is not None else 2 ** (attempt - 1)` and sleeps `min(delay, MAX_BACKOFF_S)` on both the vendor-header path and the exponential-backoff fallback path -- the asymmetry from round 1 (only the fallback path was clamped) is gone. Independently re-ran `uv run pytest`: `test_retry_after_is_clamped_to_max_backoff` and `test_retry_after_exhausted_is_clamped_on_every_retry_before_raising` both pass; read the loop in `call()` and confirmed the clamp applies on every retry attempt, not just the first.
+2. **Finding 2 (no structured per-tool-call logging)** -- confirmed fixed. `client.py:call()` wraps the retry loop in `try/finally` and emits one `logging.getLogger(__name__).info(json.dumps(...))` line per invocation with `request_id`, `tool`, `service`, `method`, `status_code`, `outcome`, `duration_ms`; all 10 tool call sites now pass a distinct `tool_name` string into `run_tool` (checked every call site in `tools/incidents.py`, `tools/network.py`, `tools/policies.py` -- none left on the old one-argument signature). `__main__.py` sets `logging.basicConfig(level=logging.INFO, ...)` so the line isn't swallowed by the default root WARNING level under uvicorn -- verified live: ran the server locally with a placeholder `X-Bitdefender-Api-Key` and confirmed `/health` -> 200, missing-header `/mcp` POST -> 401, `initialize` -> 200. The credential-never-logged claim is independently covered by `test_successful_tool_call_emits_one_structured_log_line` and `test_failed_tool_call_emits_a_log_line_with_error_outcome`, both asserting the raw API key string is absent from the log record.
+
+### New diff since round 1 (`b9abda0...2162524`)
+
+No new must-fix or suggestion findings. The diff is exactly the two fixes above plus their regression tests (`logging_context.py` added; `middleware.py`, `tools/_shared.py`, the three `tools/*.py` call sites, `__main__.py` touched only to wire request-id/tool-name scoping and log output; `tests/test_tools.py`, `tests/test_middleware.py` extended). Checked for scope creep against the tech design -- none found; both changes are exactly what round 1 asked for, nothing additional was bundled in.
+
+### Independent verification run this round
+
+- `uv sync && uv run pytest -q`: 26 passed, 0 failed (matches the `[DEV]` stub's claim).
+- Chinese-character scan (`grep -rnP '[\x{4e00}-\x{9fff}]' --exclude-dir=.git --exclude-dir=.venv .`): only hits are inside this review doc's own Round 1 findings, verbatim-quoting SOP §14 Checklist line items as citation evidence (not new in this round's diff, not in `src/`, `tests/`, or `README.md`) -- the product code and tests are clean.
+- `README.md`'s Connector section diffed byte-for-byte against `~/.claude/skills/vendor-mcp-development/reference/readme-connector-section.md`: identical.
+- Smoke test (see Finding 2 verification above): `/health` 200, missing-header `/mcp` 401, `initialize` with placeholder header 200.
+- `main` is still at `28c9850` (unchanged since round 1); `git merge-base --is-ancestor origin/main HEAD` holds, so merging `dev/PRD-21222` into `main` will be a clean fast-forward-style no-ff merge with no rebase needed.
+
+**Conclusion**: both round 1 must-fix findings are correctly fixed and independently re-verified; no new issues in this round's diff. Approved. Proceeding to merge into `main`, publish to INT, and the connector wiki.
