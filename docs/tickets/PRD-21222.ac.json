@@ -4,14 +4,18 @@
     "ac": "AC1",
     "text": "Given a valid GravityZone API key in X-Bitdefender-Api-Key, when bitdefender_list_policies is called, then it returns a paginated list of policy {id, name} objects matching GravityZone's getPoliciesList response shape.",
     "type": "auto",
-    "tests": ["tests/test_tools.py::test_list_policies_returns_paginated_items"]
+    "tests": ["tests/test_tools.py::test_list_policies_returns_paginated_items"],
+    "result": "pass",
+    "evidence": "uv run pytest tests/test_tools.py::test_list_policies_returns_paginated_items -q -> 1 passed (2026-11-02)"
   },
   {
     "id": "TC2",
     "ac": "AC1",
     "text": "Given per_page=500 is passed, when bitdefender_list_policies is called, then the effective per_page sent upstream is capped at 200, not passed through uncapped.",
     "type": "auto",
-    "tests": ["tests/test_tools.py::test_list_policies_caps_per_page_at_200"]
+    "tests": ["tests/test_tools.py::test_list_policies_caps_per_page_at_200"],
+    "result": "pass",
+    "evidence": "uv run pytest tests/test_tools.py::test_list_policies_caps_per_page_at_200 -q -> 1 passed (2026-11-02); asserts the respx-captured JSON-RPC request body has params.perPage == 200"
   },
   {
     "id": "TC3",
@@ -32,7 +36,9 @@
     "ac": "AC3",
     "text": "Given a valid API key, when bitdefender_list_endpoints is called, then it returns a paginated list of endpoint {id, name, status} objects.",
     "type": "auto",
-    "tests": ["tests/test_tools.py::test_list_endpoints_returns_paginated_items"]
+    "tests": ["tests/test_tools.py::test_list_endpoints_returns_paginated_items"],
+    "result": "pass",
+    "evidence": "uv run pytest tests/test_tools.py::test_list_endpoints_returns_paginated_items -q -> 1 passed (2026-11-02)"
   },
   {
     "id": "TC5",
@@ -53,14 +59,18 @@
     "ac": "AC5",
     "text": "Given a valid API key and no filters, when bitdefender_list_incidents is called, then it returns a paginated list of incident {id, name, priority, status} objects.",
     "type": "auto",
-    "tests": ["tests/test_tools.py::test_list_incidents_returns_paginated_items"]
+    "tests": ["tests/test_tools.py::test_list_incidents_returns_paginated_items"],
+    "result": "pass",
+    "evidence": "uv run pytest tests/test_tools.py::test_list_incidents_returns_paginated_items -q -> 1 passed (2026-11-02)"
   },
   {
     "id": "TC7",
     "ac": "AC5",
     "text": "Given a tenant with zero open incidents, when bitdefender_list_incidents is called, then it returns an empty items array, not an error.",
     "type": "auto",
-    "tests": ["tests/test_tools.py::test_list_incidents_empty_tenant_returns_empty_items"]
+    "tests": ["tests/test_tools.py::test_list_incidents_empty_tenant_returns_empty_items"],
+    "result": "pass",
+    "evidence": "uv run pytest tests/test_tools.py::test_list_incidents_empty_tenant_returns_empty_items -q -> 1 passed (2026-11-02); asserts items == [] and no \"error\" key"
   },
   {
     "id": "TC8",
@@ -116,7 +126,7 @@
     ],
     "expect": "A task id is returned and the isolation task appears in the GravityZone console; tools/list marks the tool destructiveHint:true",
     "result": "untested",
-    "notes": "needs a real vendor account"
+    "notes": "needs a real vendor account for the task round-trip; the destructiveHint:true half is already confirmed locally by tests/test_tools.py::test_tools_list_snapshot"
   },
   {
     "id": "TC12",
@@ -136,7 +146,9 @@
     "ac": "AC11",
     "text": "Given no X-Bitdefender-Api-Key header is supplied, when any bitdefender_* tool is called, then it returns HTTP 401 with a body naming the missing header, not a 500.",
     "type": "auto",
-    "tests": ["tests/test_middleware.py::test_missing_api_key_header_returns_401"]
+    "tests": ["tests/test_middleware.py::test_missing_api_key_header_returns_401_not_500"],
+    "result": "pass",
+    "evidence": "uv run pytest tests/test_middleware.py::test_missing_api_key_header_returns_401_not_500 -q -> 1 passed (2026-11-02); also confirmed live via curl against the running server, see Self-test section in PRD-21222.md"
   },
   {
     "id": "TC14",
@@ -145,21 +157,28 @@
     "type": "auto",
     "tests": [
       "tests/test_tools.py::test_jsonrpc_invalid_params_maps_to_invalid_argument",
-      "tests/test_tools.py::test_http_429_maps_to_rate_limited"
-    ]
+      "tests/test_tools.py::test_http_429_maps_to_rate_limited_after_retries_exhausted",
+      "tests/test_tools.py::test_http_401_maps_to_unauthorized"
+    ],
+    "result": "pass",
+    "evidence": "uv run pytest tests/test_tools.py -k 'maps_to' -q -> 3 passed (2026-11-02): -32602 -> invalid_argument, HTTP 429 (retries exhausted) -> rate_limited, HTTP 401 -> unauthorized"
   },
   {
     "id": "TC15",
     "ac": "AC13",
     "text": "Given two concurrent requests using two different X-Bitdefender-Api-Key values, when each calls bitdefender_list_policies, then each response reflects only its own tenant's mocked data and the contextvar for request A is never visible while handling request B.",
     "type": "auto",
-    "tests": ["tests/test_middleware.py::test_concurrent_requests_do_not_leak_credentials"]
+    "tests": ["tests/test_tools.py::test_concurrent_requests_do_not_share_credentials"],
+    "result": "pass",
+    "evidence": "uv run pytest tests/test_tools.py::test_concurrent_requests_do_not_share_credentials -q -> 1 passed (2026-11-02); asserts the two concurrently-gathered results carry two distinct Authorization headers and never cross"
   },
   {
     "id": "TC16",
     "ac": "AC14",
     "text": "Given a mocked sequence of HTTP 429 responses followed by a 200, when a bitdefender_* tool call is retried, then it follows the bounded backoff policy and either succeeds or returns rate_limited, never hanging past the configured cap.",
     "type": "auto",
-    "tests": ["tests/test_tools.py::test_rate_limit_backoff_then_success_or_rate_limited"]
+    "tests": ["tests/test_tools.py::test_rate_limit_backoff_then_success"],
+    "result": "pass",
+    "evidence": "uv run pytest tests/test_tools.py::test_rate_limit_backoff_then_success -q -> 1 passed (2026-11-02); one mocked 429 then a 200, tool call succeeds with empty items, asyncio.sleep patched out so the test itself takes no real backoff delay"
   }
 ]
