@@ -1,5 +1,7 @@
 # PRD-21222 · Code review
 
+Status: frozen @ 2162524
+
 ## Round 1 · 2026-11-02 · reviewed dev/PRD-21222 @ 0943fe2 (base main @ 28c9850)
 
 Verdict: changes requested
@@ -26,3 +28,26 @@ Only the two must-fix findings were addressed; the two suggestions are out of sc
 **Re-tested on**: `dev/PRD-21222` at the fix commit pushed this round (see the Doc(en) link in this round's `[DEV]` stub for the exact sha), synced with `main @ 28c9850` (no new commits on `main` since round 1 -- `git merge-base --is-ancestor origin/main HEAD` holds, nothing to merge).
 
 **Gate re-run**: `uv run pytest` -- 26 passed (17 pre-existing + 9 new), 0 failed. `tdd.py diff --from baseline --to final`: no regressions, no new failures. Chinese-character scan (`grep -rnP '[\x{4e00}-\x{9fff}]' src/ tests/ README.md docs/tickets/PRD-21222.md`): no matches (one was introduced and fixed in `middleware.py`'s docstring during this round, before commit). Smoke test against a locally running server with a placeholder `X-Bitdefender-Api-Key`: `/health` -> 200, missing-header `/mcp` POST -> 401, `initialize` with the placeholder header -> 200. `tools/list` count (10) and shape re-verified via `tests/test_tools.py::test_tools_list_snapshot`, unchanged by this round.
+
+## Round 2 · 2026-11-02 · reviewed dev/PRD-21222 @ 2162524 (base main @ 28c9850)
+
+Verdict: approved
+
+### Fix verification (round 1 must-fix)
+
+1. **Finding 1 (unbounded `Retry-After` sleep)** -- confirmed fixed. `client.py:_sleep_before_retry` now computes `delay = retry_after_s if retry_after_s is not None else 2 ** (attempt - 1)` and sleeps `min(delay, MAX_BACKOFF_S)` on both the vendor-header path and the exponential-backoff fallback path -- the asymmetry from round 1 (only the fallback path was clamped) is gone. Independently re-ran `uv run pytest`: `test_retry_after_is_clamped_to_max_backoff` and `test_retry_after_exhausted_is_clamped_on_every_retry_before_raising` both pass; read the loop in `call()` and confirmed the clamp applies on every retry attempt, not just the first.
+2. **Finding 2 (no structured per-tool-call logging)** -- confirmed fixed. `client.py:call()` wraps the retry loop in `try/finally` and emits one `logging.getLogger(__name__).info(json.dumps(...))` line per invocation with `request_id`, `tool`, `service`, `method`, `status_code`, `outcome`, `duration_ms`; all 10 tool call sites now pass a distinct `tool_name` string into `run_tool` (checked every call site in `tools/incidents.py`, `tools/network.py`, `tools/policies.py` -- none left on the old one-argument signature). `__main__.py` sets `logging.basicConfig(level=logging.INFO, ...)` so the line isn't swallowed by the default root WARNING level under uvicorn -- verified live: ran the server locally with a placeholder `X-Bitdefender-Api-Key` and confirmed `/health` -> 200, missing-header `/mcp` POST -> 401, `initialize` -> 200. The credential-never-logged claim is independently covered by `test_successful_tool_call_emits_one_structured_log_line` and `test_failed_tool_call_emits_a_log_line_with_error_outcome`, both asserting the raw API key string is absent from the log record.
+
+### New diff since round 1 (`b9abda0...2162524`)
+
+No new must-fix or suggestion findings. The diff is exactly the two fixes above plus their regression tests (`logging_context.py` added; `middleware.py`, `tools/_shared.py`, the three `tools/*.py` call sites, `__main__.py` touched only to wire request-id/tool-name scoping and log output; `tests/test_tools.py`, `tests/test_middleware.py` extended). Checked for scope creep against the tech design -- none found; both changes are exactly what round 1 asked for, nothing additional was bundled in.
+
+### Independent verification run this round
+
+- `uv sync && uv run pytest -q`: 26 passed, 0 failed (matches the `[DEV]` stub's claim).
+- Chinese-character scan (`grep -rnP '[\x{4e00}-\x{9fff}]' --exclude-dir=.git --exclude-dir=.venv .`): only hits are inside this review doc's own Round 1 findings, verbatim-quoting SOP §14 Checklist line items as citation evidence (not new in this round's diff, not in `src/`, `tests/`, or `README.md`) -- the product code and tests are clean.
+- `README.md`'s Connector section diffed byte-for-byte against `~/.claude/skills/vendor-mcp-development/reference/readme-connector-section.md`: identical.
+- Smoke test (see Finding 2 verification above): `/health` 200, missing-header `/mcp` 401, `initialize` with placeholder header 200.
+- `main` is still at `28c9850` (unchanged since round 1); `git merge-base --is-ancestor origin/main HEAD` holds, so merging `dev/PRD-21222` into `main` will be a clean fast-forward-style no-ff merge with no rebase needed.
+
+**Conclusion**: both round 1 must-fix findings are correctly fixed and independently re-verified; no new issues in this round's diff. Approved. Proceeding to merge into `main`, publish to INT, and the connector wiki.
